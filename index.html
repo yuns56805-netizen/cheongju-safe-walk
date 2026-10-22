@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>청주 안심보행환경 분석지도 - 오프라인 도로데이터판</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,"Noto Sans KR",sans-serif;color:#202124}
+header{padding:12px 16px;border-bottom:1px solid #ddd;background:#fff}h1{margin:0;font-size:19px}header p{margin:3px 0 0;color:#666;font-size:12px}
+#app{display:flex;height:calc(100vh - 70px)}#panel{width:320px;padding:14px;background:#fff;border-right:1px solid #ddd;overflow:auto}#map{flex:1;min-height:500px}
+h2{font-size:14px;margin:0 0 8px}.sec{margin-bottom:17px}
+label{display:flex;gap:7px;align-items:center;padding:6px 0}.sw{width:14px;height:14px;border-radius:3px;border:1px solid #999}.r{background:#e53935}.b{background:#1976d2}.g{background:#43a047}.p{background:#8e44ad}.y{background:#f9c32d}.w{background:#fff}
+button,input[type=file]{width:100%;margin-top:6px;padding:9px;border-radius:7px;border:1px solid #ccc;background:#fff}button{background:#333;color:#fff;border:0;font-weight:700}button.alt{background:#eee;color:#333}
+.stat,.note{font-size:12px;line-height:1.55}.stat{padding:9px;background:#f7f7f7;border-radius:8px}.note{color:#666}
+.legend{background:#fff;padding:8px 10px;border-radius:7px;box-shadow:0 1px 5px #999;font-size:11px;line-height:1.7}.legend i{display:inline-block;width:15px;height:4px;margin-right:5px;vertical-align:middle}
+@media(max-width:700px){#app{display:block;height:auto}#panel{width:100%;border:0;border-bottom:1px solid #ddd}#map{height:65vh}}
+</style>
+</head>
+<body>
+<header><h1>청주 안심보행환경 분석지도</h1><p>청주시 전체 도로 GeoJSON을 기기에 저장하여 빠르게 사용하는 버전</p></header>
+<div id="app">
+<aside id="panel">
+<div class="sec"><h2>① 도로 데이터</h2>
+<input id="file" type="file" accept=".geojson,.json,application/geo+json,application/json">
+<button id="save">현재 도로 데이터를 기기에 저장</button>
+<button id="clear" class="alt">저장된 도로 데이터 삭제</button>
+<div id="stat" class="stat">아직 도로 데이터가 없습니다.<br>GeoJSON 파일을 선택해 주세요.</div>
+</div>
+
+<div class="sec"><h2>② 분석 조건</h2>
+<label><input type="checkbox" data-c="lighting" checked><span class="sw r"></span>🔴 조명</label>
+<label><input type="checkbox" data-c="police" checked><span class="sw b"></span>🔵 경찰 접근성</label>
+<label><input type="checkbox" data-c="entertainment" checked><span class="sw g"></span>🟢 유흥업소 없음</label>
+<label><input type="checkbox" data-c="cctv" checked><span class="sw p"></span>🟣 CCTV</label>
+<label><input type="checkbox" data-c="facility" checked><span class="sw y"></span>🟡 생활시설 접근성</label>
+<label><input type="checkbox" data-c="sidewalk" checked><span class="sw w"></span>⚪ 보도 확보</label>
+</div>
+
+<div class="sec"><h2>③ 표시 방법</h2>
+<select id="mode" style="width:100%;padding:9px;border:1px solid #ccc;border-radius:7px">
+<option value="all">모든 도로</option><option value="conditions">조건 데이터가 있는 도로만</option>
+</select>
+</div>
+
+<div class="sec"><h2>데이터 구조</h2>
+<p class="note">도로 GeoJSON의 각 Feature에 다음 속성을 0/1로 넣을 수 있습니다:<br>
+<code>lighting, police, entertainment, cctv, facility, sidewalk</code><br><br>
+예: lighting=1이면 🔴 조건을 충족합니다.</p>
+</div>
+
+<div class="sec"><p class="note"><b>중요:</b> 이 버전은 인터넷에서 도로를 매번 검색하지 않습니다. 한 번 GeoJSON을 넣어 저장하면 다음 실행에서 기기 저장 데이터를 불러옵니다. 현재 6개 조건은 데이터 속성이 있을 때만 실제로 색칠됩니다.</p></div>
+</aside>
+<main id="map"></main>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const map=L.map('map',{preferCanvas:true}).setView([36.6424,127.4890],12);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+maxZoom:19,attribution:'© OpenStreetMap contributors'
+}).addTo(map);
+
+const colors={lighting:'#e53935',police:'#1976d2',entertainment:'#43a047',cctv:'#8e44ad',facility:'#f9c32d',sidewalk:'#fff'};
+let data=null, layer=null;
+
+function esc(x){return String(x??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+function setStat(t){document.getElementById('stat').innerHTML=t;}
+
+function draw(){
+ if(layer) layer.remove();
+ if(!data)return;
+ const selected=[...document.querySelectorAll('[data-c]:checked')].map(x=>x.dataset.c);
+ const mode=document.getElementById('mode').value;
+ const fs=(data.features||[]).filter(f=>{
+   if(mode==='all')return true;
+   const p=f.properties||{};
+   return selected.some(c=>Number(p[c])===1);
+ });
+ layer=L.layerGroup().addTo(map);
+ let shown=0;
+ fs.forEach(f=>{
+   const p=f.properties||{}, coords=f.geometry?.coordinates;
+   if(!coords)return;
+   const lines=[];
+   if(f.geometry.type==='LineString')lines.push(coords);
+   else if(f.geometry.type==='MultiLineString')lines.push(...coords);
+   for(const c of selected){
+     if(Number(p[c])!==1)continue;
+     lines.forEach(line=>{
+       const pts=line.map(x=>[x[1],x[0]]);
+       L.polyline(pts,{color:colors[c],weight:6,opacity:.72,lineCap:'round',lineJoin:'round'})
+        .bindPopup(`<b>${esc(p.name||p.road_name||'도로')}</b><br>${label(c)}<br><small>도로 데이터의 조건 속성</small>`)
+        .addTo(layer);
+     });
+     shown++;
+   }
+ });
+ setStat(`<b>전체 도로: ${(data.features||[]).length.toLocaleString()}개</b><br>현재 조건 선: ${shown.toLocaleString()}개<br>기기에 저장하면 다음 실행에서도 사용 가능합니다.`);
+}
+
+function label(c){return {lighting:'🔴 조명',police:'🔵 경찰 접근성',entertainment:'🟢 유흥업소 없음',cctv:'🟣 CCTV',facility:'🟡 생활시설 접근성',sidewalk:'⚪ 보도 확보'}[c];}
+
+document.getElementById('file').addEventListener('change',async e=>{
+ const f=e.target.files[0]; if(!f)return;
+ try{data=JSON.parse(await f.text());
+   if(data.type!=='FeatureCollection')throw new Error('FeatureCollection 형식이 아닙니다.');
+   draw(); map.fitBounds(layer.getBounds());
+ }catch(err){setStat('파일을 읽지 못했습니다: '+esc(err.message));}
+});
+document.getElementById('save').onclick=()=>{
+ if(!data){setStat('먼저 GeoJSON을 선택하세요.');return;}
+ try{localStorage.setItem('cheongju_roads_geojson_v1',JSON.stringify(data));setStat('✅ 청주시 도로 데이터가 이 기기에 저장되었습니다.');}
+ catch(e){setStat('저장 공간이 부족합니다. GeoJSON 용량이 너무 클 수 있습니다.');}
+};
+document.getElementById('clear').onclick=()=>{
+ localStorage.removeItem('cheongju_roads_geojson_v1');data=null;if(layer)layer.remove();
+ setStat('저장된 도로 데이터를 삭제했습니다.');
+};
+document.querySelectorAll('[data-c]').forEach(x=>x.onchange=draw);
+document.getElementById('mode').onchange=draw;
+
+try{
+ const s=localStorage.getItem('cheongju_roads_geojson_v1');
+ if(s){data=JSON.parse(s);draw();if(layer&&layer.getBounds().isValid())map.fitBounds(layer.getBounds());}
+}catch(e){}
+
+const legend=L.control({position:'bottomright'});
+legend.onAdd=()=>{const d=L.DomUtil.create('div','legend');d.innerHTML='<b>분석 색상</b><br><i style="background:#e53935"></i>🔴 조명<br><i style="background:#1976d2"></i>🔵 경찰 접근성<br><i style="background:#43a047"></i>🟢 유흥업소 없음<br><i style="background:#8e44ad"></i>🟣 CCTV<br><i style="background:#f9c32d"></i>🟡 생활시설<br><i style="background:#fff;border:1px solid #999"></i>⚪ 보도';return d};legend.addTo(map);
+</script>
+</body></html>
